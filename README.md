@@ -77,12 +77,8 @@ Exit: 0
 ### Claude Code
 
 ```bash
-# From local folder:
-/plugin marketplace add /path/to/fewword
-/plugin install fewword@fewword-marketplace
+/plugin install https://github.com/sheeki03/Few-Word
 ```
-
-Or copy to `~/.claude/plugins/fewword/`
 
 ### OpenCode
 
