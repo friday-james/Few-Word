@@ -15,6 +15,47 @@ A Claude Code plugin that automatically offloads large command outputs to files,
 
 ---
 
+## The Problem
+
+AI coding agents hit a wall when:
+- **Tool outputs bloat your context** — One big test run or log dump eats 10k tokens that sit there forever
+- **Plans get lost** — After context summarization, Claude forgets what it was doing
+- **You're paying for waste** — Most of your context is irrelevant to the current step
+
+---
+
+## The Solution
+
+FewWord implements **dynamic context discovery** — patterns from [Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus) and [LangChain](https://blog.langchain.com/how-agents-can-use-filesystems-for-context-engineering/) that use the filesystem as infinite, searchable memory.
+
+**Instead of this:**
+```
+[26,000 tokens of command outputs sitting in context forever]
+```
+
+**You get this:**
+```
+=== [FewWord: Output offloaded] ===
+File: .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
+Size: 15534 bytes, 882 lines
+Exit: 0
+
+=== First 10 lines ===
+/usr/bin/uux
+/usr/bin/cpan
+...
+
+=== Last 10 lines ===
+/usr/bin/gunzip
+...
+
+=== Retrieval commands ===
+  Full: cat .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
+  Grep: grep 'pattern' .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
+```
+
+---
+
 ## How It Works
 
 ```
@@ -35,7 +76,7 @@ A Claude Code plugin that automatically offloads large command outputs to files,
 │              ┌───────────────┴───────────────┐                  │
 │              ▼                               ▼                   │
 │   ┌─────────────────────┐      ┌─────────────────────────┐      │
-│   │  📁 Write to Disk   │      │  📋 Return to Context   │      │
+│   │  Write to Disk      │      │  Return to Context      │      │
 │   │  ─────────────────  │      │  ────────────────────   │      │
 │   │  .fewword/scratch/  │      │  File: pytest_143022.txt│      │
 │   │  tool_outputs/      │      │  Size: 45KB, Exit: 1    │      │
@@ -80,52 +121,30 @@ Total Context: 84k tokens (with plugin) vs 105k tokens (without)
 └── Free space:      ...
 ```
 
-**The 82% savings (21.3k tokens) is specifically on Message tokens** — that's where your actual conversation and command outputs live. The other categories (system prompt, tools) are constant overhead that exists regardless of what you do.
-
-**Why this matters:**
-- Message tokens are what fills up as you work
-- Without FewWord: 3 commands = 26k tokens of outputs sitting in context forever
-- With FewWord: Same 3 commands = 4.7k tokens (pointers + previews only)
-- Full outputs saved to `.fewword/scratch/` for retrieval when needed
+**The 82% savings (21.3k tokens) is specifically on Message tokens** — that's where your actual conversation and command outputs live.
 
 ---
 
-## The Problem
+## Installation
 
-AI coding agents hit a wall when:
-- **Tool outputs bloat your context** — One big test run or log dump eats 10k tokens that sit there forever
-- **Plans get lost** — After context summarization, Claude forgets what it was doing
-- **You're paying for waste** — Most of your context is irrelevant to the current step
-
-## The Solution
-
-FewWord implements **dynamic context discovery** — patterns from [Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus) and [LangChain](https://blog.langchain.com/how-agents-can-use-filesystems-for-context-engineering/) that use the filesystem as infinite, searchable memory.
-
-**Instead of this:**
-```
-[26,000 tokens of command outputs sitting in context forever]
+```bash
+claude plugin install fewword@sheeki03-Few-Word
 ```
 
-**You get this:**
-```
-=== [FewWord: Output offloaded] ===
-File: .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
-Size: 15534 bytes, 882 lines
-Exit: 0
+**Important**: Start a new session after installation for hooks to load.
 
-=== First 10 lines ===
-/usr/bin/uux
-/usr/bin/cpan
-...
+**That's it!** FewWord works automatically — no configuration needed.
 
-=== Last 10 lines ===
-/usr/bin/gunzip
-...
+---
 
-=== Retrieval commands ===
-  Full: cat .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
-  Grep: grep 'pattern' .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
-```
+## Commands
+
+| Command | What It Does |
+|---------|--------------|
+| `/fewword-help` | Show detailed help and how the plugin works |
+| `/context-init` | Set up FewWord directory structure |
+| `/context-cleanup` | See storage stats, clean old files |
+| `/context-search <term>` | Search through all offloaded context |
 
 ---
 
@@ -147,24 +166,6 @@ Exit: 0
 | **PreToolUse** | Intercepts Bash commands, wraps large outputs |
 | **SessionEnd** | Archives completed plans |
 | **Stop** | Warns if scratch storage exceeds 100MB |
-
-### Manual Commands
-
-| Command | What It Does |
-|---------|--------------|
-| `/context-init` | Set up FewWord directory structure |
-| `/context-cleanup` | See storage stats, clean old files |
-| `/context-search <term>` | Search through all offloaded context |
-
----
-
-## Installation
-
-```bash
-claude plugin install fewword@sheeki03-Few-Word
-```
-
-**Important**: Start a new session after installation for hooks to load.
 
 ---
 
@@ -228,34 +229,6 @@ The plugin conservatively skips these commands:
 
 ---
 
-## Example: Before & After
-
-### Before (Traditional)
-```
-You: Run the full test suite
-Claude: [15,000 tokens of test output in context]
-You: Now fix the auth bug
-Claude: [still carrying 15,000 tokens of test output]
-You: What tests are failing?
-Claude: [context summarized, test details lost]
-```
-
-### After (With FewWord)
-```
-You: Run the full test suite
-Claude: [Output offloaded to .fewword/scratch/tool_outputs/pytest_143022.txt]
-        Size: 45678 bytes, Exit: 1
-        === Last 10 lines ===
-        FAILED auth_test.py::test_login - AssertionError
-You: Now fix the auth bug
-Claude: [working with clean context]
-You: What tests are failing?
-Claude: grep FAILED .fewword/scratch/tool_outputs/pytest_143022.txt
-        → FAILED auth_test.py::test_login - expected 200, got 401
-```
-
----
-
 ## Privacy & Security
 
 ### Bash Commands
@@ -281,7 +254,7 @@ FewWord intercepts MCP tool calls (`mcp__*`) for two purposes:
 {
   "timestamp": "2026-01-08T14:30:00",
   "tool": "mcp__github__search_issues",
-  "input_keys": ["query", "repo", "limit"],  // Keys only, NOT values
+  "input_keys": ["query", "repo", "limit"],
   "input_count": 3
 }
 ```
