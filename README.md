@@ -1,8 +1,43 @@
 # FewWord
 
-**Stop losing context. Stop paying for bloated conversations.**
+> "Why waste time say lot word when few word do trick? Big output go file. Small word stay. Context happy. Me happy. Everyone go home by seven."
+>
+> — Kevin Malone
 
-A Claude Code + OpenCode plugin that automatically manages your context window by offloading large outputs to files and retrieving them on-demand. Saves **97% of context tokens** in typical sessions.
+A Claude Code plugin that automatically offloads large command outputs to files, keeping your context clean and retrievable.
+
+---
+
+## Actual Test Results
+
+We ran the same 3 commands (`find`, `ls -la`, `env`) in two fresh Claude Code sessions:
+
+| Metric | WITH Plugin | WITHOUT Plugin |
+|--------|-------------|----------------|
+| **Message Tokens** | **4.7k** | **26.0k** |
+| Tokens Saved | — | **21.3k** |
+| **Savings** | — | **82%** |
+
+### Understanding the Numbers
+
+When you run `/context`, you see several categories:
+
+```
+Total Context: 84k tokens (with plugin) vs 105k tokens (without)
+├── System prompt:  3.8k  (constant - Claude's instructions)
+├── System tools:  15.8k  (constant - built-in tools)
+├── MCP tools:     14.7k  (constant - browser automation, etc.)
+├── Messages:       4.7k  ← THIS IS WHAT FEWWORD REDUCES (was 26k)
+└── Free space:      ...
+```
+
+**The 82% savings (21.3k tokens) is specifically on Message tokens** — that's where your actual conversation and command outputs live. The other categories (system prompt, tools) are constant overhead that exists regardless of what you do.
+
+**Why this matters:**
+- Message tokens are what fills up as you work
+- Without FewWord: 3 commands = 26k tokens of outputs sitting in context forever
+- With FewWord: Same 3 commands = 4.7k tokens (pointers + previews only)
+- Full outputs saved to `.fewword/scratch/` for retrieval when needed
 
 ---
 
@@ -11,8 +46,7 @@ A Claude Code + OpenCode plugin that automatically manages your context window b
 AI coding agents hit a wall when:
 - **Tool outputs bloat your context** — One big test run or log dump eats 10k tokens that sit there forever
 - **Plans get lost** — After context summarization, Claude forgets what it was doing
-- **Sub-agents play telephone** — Information degrades as it passes through message chains
-- **You're paying for waste** — 80% of your context is irrelevant to the current step
+- **You're paying for waste** — Most of your context is irrelevant to the current step
 
 ## The Solution
 
@@ -20,22 +54,28 @@ FewWord implements **dynamic context discovery** — patterns from [Cursor](http
 
 **Instead of this:**
 ```
-[10,000 token test output sitting in context forever]
+[26,000 tokens of command outputs sitting in context forever]
 ```
 
 **You get this:**
 ```
 === [FewWord: Output offloaded] ===
-File: .fewword/scratch/tool_outputs/pytest_143022_a1b2c3d4.txt
-Size: 45678 bytes, 1234 lines
+File: .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
+Size: 15534 bytes, 882 lines
 Exit: 0
 
 === First 10 lines ===
-...preview...
+/usr/bin/uux
+/usr/bin/cpan
+...
+
+=== Last 10 lines ===
+/usr/bin/gunzip
+...
 
 === Retrieval commands ===
-  Full: cat .fewword/scratch/tool_outputs/pytest_143022_a1b2c3d4.txt
-  Grep: grep 'FAILED' .fewword/scratch/tool_outputs/pytest_143022_a1b2c3d4.txt
+  Full: cat .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
+  Grep: grep 'pattern' .fewword/scratch/tool_outputs/find_143022_a1b2c3d4.txt
 ```
 
 ---
@@ -48,17 +88,14 @@ Exit: 0
 |---------|--------------|
 | **Bash Output Offloading** | Large outputs (>8KB) → written to file, pointer + preview returned. Small outputs → shown normally. |
 | **Plan Persistence** | Active plan in `.fewword/index/current_plan.yaml`, auto-archived on completion |
-| **MCP Tool Logging** | All MCP calls logged (sanitized, no secrets) |
-| **MCP Write Gating** | Write operations require confirmation |
-| **Pagination Clamping** | Prevents excessive MCP query results |
+| **Auto-cleanup** | Old scratch files deleted on session start (>60min for outputs, >120min for subagents) |
 
-### Hook Events (Claude Code)
+### Hook Events
 
 | Event | Action |
 |-------|--------|
-| **SessionStart** | Creates directories, cleans stale files |
-| **PreToolUse** | Intercepts Bash commands, clamps MCP pagination |
-| **PermissionRequest** | Gates MCP write operations |
+| **SessionStart** | Creates directories, cleans stale files, updates .gitignore |
+| **PreToolUse** | Intercepts Bash commands, wraps large outputs |
 | **SessionEnd** | Archives completed plans |
 | **Stop** | Warns if scratch storage exceeds 100MB |
 
@@ -74,17 +111,11 @@ Exit: 0
 
 ## Installation
 
-### Claude Code
-
 ```bash
-/plugin install https://github.com/sheeki03/Few-Word
+claude plugin install fewword@sheeki03-Few-Word
 ```
 
-### OpenCode
-
-Copy `.opencode/plugin/fewword.ts` to your project's `.opencode/plugin/` directory.
-
-**Important**: OpenCode MCP interception is best-effort and may be log-only depending on version. See [known limitations](#opencode-limitations).
+**Important**: Start a new session after installation for hooks to load.
 
 ---
 
@@ -92,22 +123,19 @@ Copy `.opencode/plugin/fewword.ts` to your project's `.opencode/plugin/` directo
 
 ```
 your-project/
-└── .fewword/                          # All plugin data
-    ├── scratch/                     # Ephemeral (auto-cleaned hourly)
-    │   ├── tool_outputs/            # Command outputs
-    │   └── subagents/               # Agent workspaces
+└── .fewword/
+    ├── scratch/                     # Ephemeral (auto-cleaned)
+    │   ├── tool_outputs/            # Command outputs (cleaned >60min)
+    │   └── subagents/               # Agent workspaces (cleaned >120min)
     ├── memory/                      # Persistent
     │   ├── plans/                   # Archived completed plans
-    │   ├── history/                 # Archived sessions
-    │   └── preferences.yaml         # User preferences
+    │   └── history/                 # Archived sessions
     ├── index/                       # Metadata (never auto-cleaned)
-    │   ├── current_plan.yaml        # Active plan
-    │   ├── tool_log.jsonl           # Tool execution log
-    │   └── mcp_metadata.jsonl       # MCP metadata
+    │   └── current_plan.yaml        # Active plan
     └── DISABLE_OFFLOAD              # Escape hatch file
 ```
 
-**Note**: The plugin automatically adds `.fewword/scratch/` and `.fewword/index/` to `.gitignore` on first session start in a git repo.
+**Note**: The plugin automatically adds `.fewword/scratch/` and `.fewword/index/` to `.gitignore`.
 
 ---
 
@@ -121,59 +149,25 @@ touch .fewword/DISABLE_OFFLOAD
 
 # Or via environment variable
 export FEWWORD_DISABLE=1
-
-# Allow MCP write operations
-export FEWWORD_ALLOW_WRITE=1
 ```
 
 ---
 
-## What Gets Skipped (v1)
+## What Gets Skipped
 
 The plugin conservatively skips these commands:
 
-- **Interactive**: ssh, vim, less, top, watch, python, node, psql, etc.
-- **Already redirecting**: commands with `>`, `2>`, `| tee`, `| less`
+- **Interactive**: ssh, vim, less, top, python, node, psql, etc.
+- **Already redirecting**: commands with `>`, `2>`, `| tee`
 - **Heredocs**: commands containing `<<`
-- **Pipelines**: commands containing `|` (exit code masking)
+- **Pipelines**: commands containing `|` (v1 limitation)
 - **Trivial**: commands under 10 characters
-
----
-
-## Privacy & Security
-
-### What Gets Logged
-
-- Timestamp, session ID, event ID
-- Tool name
-- Coarse size metrics
-- Output file pointer
-
-### What Does NOT Get Logged
-
-- Raw command arguments (may contain secrets)
-- Full command text
-- Environment variables
-
-MCP metadata logging is sanitized: only tool names and input keys are recorded, never raw values.
-
----
-
-## OpenCode Limitations
-
-MCP tool calls may not trigger `tool.execute.before/after` hooks in some OpenCode versions. This means:
-
-- Bash offloading works reliably
-- MCP logging may not capture all calls
-- MCP write gating may not work
-
-This is a known limitation. See [OpenCode issue #2319](https://github.com/sst/opencode/issues/2319).
 
 ---
 
 ## Configuration
 
-### Hardcoded Defaults (v1)
+### Defaults (v1)
 
 | Setting | Value |
 |---------|-------|
@@ -182,8 +176,6 @@ This is a known limitation. See [OpenCode issue #2319](https://github.com/sst/op
 | Tool output retention | 60 minutes |
 | Subagent retention | 120 minutes |
 | Scratch size warning | 100MB |
-
-Configuration file support planned for v1.1.
 
 ---
 
@@ -209,9 +201,23 @@ Claude: [Output offloaded to .fewword/scratch/tool_outputs/pytest_143022.txt]
 You: Now fix the auth bug
 Claude: [working with clean context]
 You: What tests are failing?
-Claude: [greps the file] grep FAILED .fewword/scratch/tool_outputs/pytest_143022.txt
-        FAILED auth_test.py::test_login - expected 200, got 401
+Claude: grep FAILED .fewword/scratch/tool_outputs/pytest_143022.txt
+        → FAILED auth_test.py::test_login - expected 200, got 401
 ```
+
+---
+
+## Privacy & Security
+
+### What Gets Logged
+- Timestamp, session ID, event ID
+- Tool name (e.g., "find", "pytest")
+- Output file path
+
+### What Does NOT Get Logged
+- Raw command arguments (may contain secrets)
+- Full command text
+- Environment variables
 
 ---
 
@@ -221,7 +227,6 @@ Based on research and patterns from:
 - [Cursor: Dynamic Context Discovery](https://cursor.com/blog/dynamic-context-discovery)
 - [LangChain: How Agents Can Use Filesystems](https://blog.langchain.com/how-agents-can-use-filesystems-for-context-engineering/)
 - [Manus: Context Engineering for AI Agents](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)
-- [Anthropic: Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)
 
 ---
 
@@ -237,4 +242,4 @@ Issues and PRs welcome! Ideas for improvement:
 - [ ] Configuration file support
 - [ ] Semantic search integration
 - [ ] Smarter summarization of offloaded outputs
-- [ ] Cross-session memory persistence
+- [ ] Pipeline support (currently skipped)
