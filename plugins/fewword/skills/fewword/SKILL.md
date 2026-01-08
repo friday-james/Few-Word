@@ -39,32 +39,48 @@ If automatic offloading causes issues:
 
 ## Automatic Behaviors (v1)
 
-### Bash Output Offloading
+### Bash Output Offloading with AI Summary
 
 When you run a Bash command, the plugin automatically:
 1. Captures stdout+stderr to a file
 2. After completion, measures output size
 3. If small (<8KB): shows full output normally, deletes temp file
-4. If large: shows pointer + preview (first/last 10 lines)
+4. If large: saves to file and outputs `[FEWWORD_SUMMARIZE]` marker
 5. Preserves the original exit code
 
 **What you see for large output:**
 ```
-=== [FewWord: Output offloaded] ===
-File: .fewword/scratch/tool_outputs/pytest_20250107_143022_a1b2c3d4.txt
-Size: 45678 bytes, 1234 lines
-Exit: 0
+[FEWWORD_SUMMARIZE]
+file: .fewword/scratch/tool_outputs/pytest_20250107_143022_a1b2c3d4.txt
+command: pytest tests/ -v
+bytes: 45678
+lines: 1234
+exit_code: 0
 
 === First 10 lines ===
 ...preview...
 
+... (use Task tool with subagent to read and summarize full output) ...
+
 === Last 10 lines ===
 ...preview...
-
-=== Retrieval commands ===
-  Full: cat .fewword/scratch/tool_outputs/pytest_20250107_143022_a1b2c3d4.txt
-  Grep: grep 'pattern' .fewword/scratch/tool_outputs/pytest_20250107_143022_a1b2c3d4.txt
+[/FEWWORD_SUMMARIZE]
 ```
+
+**IMPORTANT - When you see `[FEWWORD_SUMMARIZE]`:**
+
+You MUST immediately spawn a Task subagent to read and summarize the full output:
+
+```
+Task tool:
+  subagent_type: "general-purpose"
+  prompt: "Read the file at {file_path} and provide a comprehensive summary.
+           The file contains output from: {command}
+           Focus on: errors, warnings, key results, and actionable items.
+           Return a structured summary that captures all important information."
+```
+
+This ensures you don't miss any important details from the full output while keeping context lean.
 
 **Skipped commands** (v1 conservatively skips):
 - Interactive: ssh, vim, less, top, watch, python, node, psql, etc.

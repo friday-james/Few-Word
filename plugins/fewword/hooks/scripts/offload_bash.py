@@ -9,7 +9,7 @@ The wrapper uses write-then-decide logic:
 1. Always capture stdout+stderr to file first
 2. After command completes, measure file size
 3. If small (<8KB): cat file to stdout, delete file (normal UX)
-4. If large: print pointer + preview only
+4. If large: save to file, output [FEWWORD_SUMMARIZE] marker for Claude to spawn subagent
 5. Always preserve exit code
 """
 
@@ -105,21 +105,24 @@ def should_skip(command: str) -> tuple[bool, str]:
     return False, ""
 
 
-def generate_wrapper(original_cmd: str, output_file: str, cwd: str) -> str:
+def generate_wrapper(original_cmd: str, output_file: str) -> str:
     """
     Generate bash wrapper that implements write-then-decide logic.
 
     1. Capture to file first (can't know size ahead of time)
     2. Measure after command completes
     3. Small output -> cat + delete (normal UX)
-    4. Large output -> pointer + preview
+    4. Large output -> save to file, output [FEWWORD_SUMMARIZE] marker for subagent
     5. Preserve exit code
     """
     # Escape the output file path for shell
     escaped_file = output_file.replace("'", "'\"'\"'")
+    # Escape original command for display (escape single quotes)
+    escaped_cmd_display = original_cmd.replace("'", "'\"'\"'")
 
     wrapper = f'''
 __fewword_out='{escaped_file}'
+__fewword_cmd='{escaped_cmd_display}'
 __fewword_dir="$(dirname "$__fewword_out")"
 mkdir -p "$__fewword_dir" 2>/dev/null
 
@@ -131,37 +134,29 @@ __fewword_exit=$?
 __fewword_bytes=$(wc -c < "$__fewword_out" 2>/dev/null | tr -d ' ')
 __fewword_lines=$(wc -l < "$__fewword_out" 2>/dev/null | tr -d ' ')
 
-# 3. Decide: small -> cat + delete, large -> pointer + preview
+# 3. Decide: small -> cat + delete, large -> marker for subagent summary
 if [ "${{__fewword_bytes:-0}}" -lt {SIZE_THRESHOLD} ]; then
   # Small output: show full content (normal UX)
   cat "$__fewword_out"
   rm -f "$__fewword_out"
 else
-  # Large output: show pointer and preview
+  # Large output: output marker for Claude to spawn summarization subagent
   echo ""
-  echo "=== [FewWord: Output offloaded] ==="
-  echo "File: $__fewword_out"
-  echo "Size: $__fewword_bytes bytes, $__fewword_lines lines"
-  echo "Exit: $__fewword_exit"
+  echo "[FEWWORD_SUMMARIZE]"
+  echo "file: $__fewword_out"
+  echo "command: $__fewword_cmd"
+  echo "bytes: $__fewword_bytes"
+  echo "lines: $__fewword_lines"
+  echo "exit_code: $__fewword_exit"
   echo ""
-  if [ "$__fewword_lines" -le {PREVIEW_LINES * 2} ]; then
-    echo "=== Full output ==="
-    cat "$__fewword_out"
-  else
-    echo "=== First {PREVIEW_LINES} lines ==="
-    head -{PREVIEW_LINES} "$__fewword_out"
-    __fewword_omitted=$(( __fewword_lines - {PREVIEW_LINES * 2} ))
-    echo ""
-    echo "... ($__fewword_omitted lines omitted) ..."
-    echo ""
-    echo "=== Last {PREVIEW_LINES} lines ==="
-    tail -{PREVIEW_LINES} "$__fewword_out"
-  fi
+  echo "=== First {PREVIEW_LINES} lines ==="
+  head -{PREVIEW_LINES} "$__fewword_out"
   echo ""
-  echo "=== Retrieval commands ==="
-  echo "  Full: cat $__fewword_out"
-  echo "  Grep: grep 'pattern' $__fewword_out"
-  echo "  Range: sed -n '50,100p' $__fewword_out"
+  echo "... (use Task tool with subagent to read and summarize full output) ..."
+  echo ""
+  echo "=== Last {PREVIEW_LINES} lines ==="
+  tail -{PREVIEW_LINES} "$__fewword_out"
+  echo "[/FEWWORD_SUMMARIZE]"
 fi
 
 # 4. Always preserve exit code
@@ -210,7 +205,7 @@ def main():
     output_file = f"{cwd}/.fewword/scratch/tool_outputs/{safe_cmd}_{timestamp}_{event_id}.txt"
 
     # Generate wrapped command
-    wrapped = generate_wrapper(command, output_file, cwd)
+    wrapped = generate_wrapper(command, output_file)
 
     # Return the updated input with correct JSON envelope
     output = {
