@@ -56,11 +56,13 @@ command: pytest tests/ -v
 bytes: 45678
 lines: 1234
 exit_code: 0
+chunks: 1
+lines_per_chunk: 1234
 
 === First 10 lines ===
 ...preview...
 
-... (use Task tool with subagent to read and summarize full output) ...
+... (spawn 1 subagent to summarize full output) ...
 
 === Last 10 lines ===
 ...preview...
@@ -69,7 +71,10 @@ exit_code: 0
 
 **IMPORTANT - When you see `[FEWWORD_SUMMARIZE]`:**
 
-You MUST immediately spawn a Task subagent to read and summarize the full output:
+Check the `chunks` field to determine how many subagents to spawn:
+
+### Single chunk (chunks: 1)
+Spawn one subagent to read and summarize the full output:
 
 ```
 Task tool:
@@ -80,7 +85,31 @@ Task tool:
            Return a structured summary that captures all important information."
 ```
 
-This ensures you don't miss any important details from the full output while keeping context lean.
+### Multiple chunks (chunks: N where N > 1)
+Spawn N subagents **in parallel** (in a single message), each reading a different portion:
+
+```
+# For chunks: 3, lines: 3000, lines_per_chunk: 1000
+
+Task 1 (lines 1-1000):
+  subagent_type: "general-purpose"
+  prompt: "Read lines 1-1000 of {file_path} using: sed -n '1,1000p' {file_path}
+           Summarize this chunk. Command was: {command}"
+
+Task 2 (lines 1001-2000):
+  subagent_type: "general-purpose"
+  prompt: "Read lines 1001-2000 of {file_path} using: sed -n '1001,2000p' {file_path}
+           Summarize this chunk. Command was: {command}"
+
+Task 3 (lines 2001-3000):
+  subagent_type: "general-purpose"
+  prompt: "Read lines 2001-3000 of {file_path} using: sed -n '2001,3000p' {file_path}
+           Summarize this chunk. Command was: {command}"
+```
+
+After all chunk summaries return, synthesize them into a final summary.
+
+This ensures no subagent's context is exceeded while capturing all information.
 
 **Skipped commands** (v1 conservatively skips):
 - Interactive: ssh, vim, less, top, watch, python, node, psql, etc.

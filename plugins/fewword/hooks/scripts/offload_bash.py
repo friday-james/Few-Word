@@ -23,8 +23,9 @@ from datetime import datetime
 
 
 # === Configuration (hardcoded for v1) ===
-SIZE_THRESHOLD = 8000  # bytes (~2000 tokens), below this show full output
-PREVIEW_LINES = 10     # lines to show from start and end for large outputs
+SIZE_THRESHOLD = 8000      # bytes (~2000 tokens), below this show full output
+CHUNK_SIZE = 50000         # bytes (~12500 tokens) per subagent chunk
+PREVIEW_LINES = 10         # lines to show from start and end for large outputs
 
 # Interactive commands that should NEVER be intercepted
 INTERACTIVE_COMMANDS = {
@@ -140,7 +141,12 @@ if [ "${{__fewword_bytes:-0}}" -lt {SIZE_THRESHOLD} ]; then
   cat "$__fewword_out"
   rm -f "$__fewword_out"
 else
-  # Large output: output marker for Claude to spawn summarization subagent
+  # Large output: output marker for Claude to spawn summarization subagent(s)
+  # Calculate number of chunks needed
+  __fewword_chunk_size={CHUNK_SIZE}
+  __fewword_chunks=$(( (__fewword_bytes + __fewword_chunk_size - 1) / __fewword_chunk_size ))
+  __fewword_lines_per_chunk=$(( (__fewword_lines + __fewword_chunks - 1) / __fewword_chunks ))
+
   echo ""
   echo "[FEWWORD_SUMMARIZE]"
   echo "file: $__fewword_out"
@@ -148,11 +154,17 @@ else
   echo "bytes: $__fewword_bytes"
   echo "lines: $__fewword_lines"
   echo "exit_code: $__fewword_exit"
+  echo "chunks: $__fewword_chunks"
+  echo "lines_per_chunk: $__fewword_lines_per_chunk"
   echo ""
   echo "=== First {PREVIEW_LINES} lines ==="
   head -{PREVIEW_LINES} "$__fewword_out"
   echo ""
-  echo "... (use Task tool with subagent to read and summarize full output) ..."
+  if [ "$__fewword_chunks" -eq 1 ]; then
+    echo "... (spawn 1 subagent to summarize full output) ..."
+  else
+    echo "... (spawn $__fewword_chunks parallel subagents, each reading ~$__fewword_lines_per_chunk lines) ..."
+  fi
   echo ""
   echo "=== Last {PREVIEW_LINES} lines ==="
   tail -{PREVIEW_LINES} "$__fewword_out"
